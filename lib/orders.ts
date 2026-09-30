@@ -1,9 +1,16 @@
-import { randomBytes } from "node:crypto";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 
-import type { Order } from "@/lib/types";
+import type { Order, OrderConfirmation } from "@/lib/types";
 
 export type StoredOrder = Order & {
   paymentIntentId?: string;
+  wooOrderId?: number;
+  confirmationToken?: string;
+  phone?: string;
+};
+
+export type OrderDraft = Omit<StoredOrder, "id" | "wooOrderId" | "confirmationToken"> & {
+  confirmationToken?: string;
 };
 
 type Attempt = {
@@ -36,8 +43,41 @@ export function newOrderId() {
   return `IQ-${randomBytes(6).toString("hex").toUpperCase()}`;
 }
 
+export function newConfirmationToken() {
+  return randomBytes(32).toString("base64url");
+}
+
 export function isOrderId(id: string) {
-  return /^IQ-[A-F0-9]{12}$/.test(id);
+  return /^IQ-[A-F0-9]{12}$/.test(id) || /^woo-\d+$/.test(id);
+}
+
+export function confirmationTokenMatches(expected: string | undefined, provided: string | null) {
+  if (!expected || !provided) return false;
+  const left = Buffer.from(expected);
+  const right = Buffer.from(provided);
+  if (left.length !== right.length) return false;
+  return timingSafeEqual(left, right);
+}
+
+export function toOrderConfirmation(order: StoredOrder): OrderConfirmation {
+  return {
+    id: order.id,
+    status: order.status,
+    demo: Boolean(order.demo || order.status === "demo"),
+    currency: order.currency,
+    items: order.items.map((item) => ({
+      name: item.name,
+      quantity: item.quantity,
+      unitPrice: item.unitPrice,
+      attributes: item.attributes,
+      productId: item.productId,
+      variationId: item.variationId,
+    })),
+    subtotal: order.subtotal,
+    shipping: order.shipping,
+    total: order.total,
+    createdAt: order.createdAt,
+  };
 }
 
 export function saveOrder(order: StoredOrder) {

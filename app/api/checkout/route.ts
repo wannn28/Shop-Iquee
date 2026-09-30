@@ -4,20 +4,11 @@ import { NextResponse } from "next/server";
 import { isAllowedCheckoutOrigin } from "@/lib/checkout-origin";
 import { checkoutFingerprint, checkoutMode, priceCheckout, validateCheckout } from "@/lib/checkout";
 import { apiHeaders, apiJson, apiOptions } from "@/lib/http";
-import {
-  claimCheckout,
-  getOrder,
-  markOrderFailed,
-  markOrderPending,
-  newOrderId,
-  recallAttempt,
-  releaseCheckout,
-  rememberAttempt,
-  saveOrder,
-  type StoredOrder,
-} from "@/lib/orders";
+import { ordersStoreFor } from "@/lib/order-store";
+import { claimCheckout, recallAttempt, releaseCheckout, rememberAttempt, toOrderConfirmation, type StoredOrder } from "@/lib/orders";
 import { getProducts } from "@/lib/products.server";
 import { clientIp, rateLimit } from "@/lib/rate-limit";
+import { wooConfigured } from "@/lib/woo/rest";
 
 const IDEMPOTENCY_KEY = /^[A-Za-z0-9_-]{16,80}$/;
 const CHECKOUT_LIMIT = 10;
@@ -51,19 +42,20 @@ export async function POST(request: Request) {
     return apiJson({ error: "Check the form and try again.", fields: validated.fields }, 400);
   }
 
-  const priced = priceCheckout(await getProducts(), validated.value.items);
-  if (!priced.ok) {
-    return apiJson({ error: priced.error, fields: { form: priced.error } }, 400);
-  }
-
-  const fingerprint = checkoutFingerprint(validated.value, priced.total);
-  const mode = checkoutMode();
+  const mode = checkoutMode({ woo: wooConfigured() });
   if (mode === "misconfigured") {
     return apiJson(
       { error: "Stripe is only partly configured. Set both keys, or CHECKOUT_DEMO=true for a no-charge preview." },
       503,
     );
   }
+
+  const priced = priceCheckout(await getProducts(), validated.value.items);
+  if (!priced.ok) {
+    return apiJson({ error: priced.error, fields: { form: priced.error } }, 400);
+  }
+
+  const fingerprint = checkoutFingerprint(validated.value, priced.total);
 
   if (!claimCheckout(idempotencyKey)) {
     return apiJson({ error: "This checkout is already in progress." }, 409);
@@ -75,41 +67,47 @@ export async function POST(request: Request) {
       return apiJson({ error: "The cart changed. Start checkout again." }, 409);
     }
 
+    const store = ordersStoreFor(mode === "stripe" ? "stripe" : "demo");
     let order: StoredOrder;
     if (existing) {
-      const stored = getOrder(existing.orderId);
+      const stored = await store.get(existing.orderId);
       if (!stored) return apiJson({ error: "This checkout expired. Start again." }, 409);
       order = stored;
       if (order.status === "confirmed") {
-        return apiJson({ order, demo: false, clientSecret: null, paid: true });
+        return apiJson(checkoutPayload(order, { demo: false, clientSecret: null, paid: true }));
       }
       if (existing.clientSecret) {
-        return apiJson({ order, demo: existing.demo, clientSecret: existing.clientSecret, paid: false });
+        return apiJson(checkoutPayload(order, { demo: existing.demo, clientSecret: existing.clientSecret, paid: false }));
       }
     } else {
-      order = saveOrder({
-        id: newOrderId(),
-        email: validated.value.email,
-        createdAt: new Date().toISOString(),
-        status: mode === "demo" ? "demo" : "pending",
-        demo: mode === "demo",
-        items: priced.lines,
-        subtotal: roundMoney(priced.subtotal),
-        shipping: roundMoney(priced.shipping),
-        total: roundMoney(priced.total),
-        currency: priced.currency,
-        shippingAddress: validated.value.shipping,
-      });
+      try {
+        order = await store.create({
+          email: validated.value.email,
+          phone: validated.value.phone,
+          createdAt: new Date().toISOString(),
+          status: mode === "demo" ? "demo" : "pending",
+          demo: mode === "demo",
+          items: priced.lines,
+          subtotal: roundMoney(priced.subtotal),
+          shipping: roundMoney(priced.shipping),
+          total: roundMoney(priced.total),
+          currency: priced.currency,
+          shippingAddress: validated.value.shipping,
+        });
+      } catch (error) {
+        console.error("Order persist failed", error);
+        return apiJson({ error: "The order could not be saved." }, 502);
+      }
       rememberAttempt(idempotencyKey, {
         fingerprint,
         orderId: order.id,
         clientSecret: null,
-        demo: mode === "demo",
+        demo: Boolean(order.demo),
       });
     }
 
     if (mode === "demo" || order.demo) {
-      return apiJson({ order, demo: true, clientSecret: null, paid: false });
+      return apiJson(checkoutPayload(order, { demo: true, clientSecret: null, paid: false }));
     }
 
     const secret = process.env.STRIPE_SECRET_KEY?.trim();
@@ -125,27 +123,30 @@ export async function POST(request: Request) {
           amount,
           currency: order.currency.toLowerCase(),
           receipt_email: order.email,
-          metadata: { orderId: order.id },
+          metadata: {
+            orderId: order.id,
+            ...(order.wooOrderId ? { wooOrderId: String(order.wooOrderId) } : {}),
+          },
           payment_method_types: ["card"],
           description: `iquee ${order.id}`,
         },
         { idempotencyKey },
       );
       if (!intent.client_secret) {
-        markOrderFailed(order.id);
+        await store.markFailed(order.id);
         return apiJson({ error: "Payment could not be started." }, 502);
       }
-      const pending = markOrderPending(order.id, intent.id) ?? order;
+      const pending = (await store.attachPayment(order.id, intent.id)) ?? order;
       rememberAttempt(idempotencyKey, {
         fingerprint,
         orderId: pending.id,
         clientSecret: intent.client_secret,
         demo: false,
       });
-      return apiJson({ order: pending, demo: false, clientSecret: intent.client_secret, paid: false });
+      return apiJson(checkoutPayload(pending, { demo: false, clientSecret: intent.client_secret, paid: false }));
     } catch (error) {
       console.error("Stripe PaymentIntent failed", error);
-      markOrderFailed(order.id);
+      await store.markFailed(order.id);
       return apiJson({ error: "Payment could not be started." }, 502);
     }
   } finally {
@@ -155,4 +156,15 @@ export async function POST(request: Request) {
 
 function roundMoney(value: number) {
   return Math.round(value * 100) / 100;
+}
+
+function checkoutPayload(
+  order: StoredOrder,
+  extra: { demo: boolean; clientSecret: string | null; paid: boolean },
+) {
+  return {
+    order: toOrderConfirmation(order),
+    confirmationToken: order.confirmationToken ?? null,
+    ...extra,
+  };
 }

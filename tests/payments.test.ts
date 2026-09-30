@@ -2,11 +2,15 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import Stripe from "stripe";
 
 import { POST as checkout } from "@/app/api/checkout/route";
+import { GET as readOrder } from "@/app/api/orders/[id]/route";
 import { POST as stripeWebhook } from "@/app/api/webhooks/stripe/route";
+import { checkoutMode } from "@/lib/checkout";
+import { shouldClearCart } from "@/lib/order-status";
 import { getOrder, resetOrderStore, saveOrder } from "@/lib/orders";
 import { applyStripePaymentEvent } from "@/lib/payments";
 import { resetRateLimits } from "@/lib/rate-limit";
-import type { Order } from "@/lib/types";
+import type { Order, OrderConfirmation } from "@/lib/types";
+import { wooPendingOrderBody } from "@/lib/woo/orders";
 
 const secretKey = ["sk", "test", "examplekeyexamplekeyex"].join("_");
 const webhookSecret = "whsec_test_secret";
@@ -87,13 +91,38 @@ describe("checkout guards", () => {
 
   it("stores a demo order and replays the same idempotency key", async () => {
     const first = await checkout(checkoutRequest(checkoutBody(), "demo-key-0000000001"));
-    const firstBody = (await first.json()) as { order: Order; demo: boolean; clientSecret: string | null };
+    const firstBody = (await first.json()) as {
+      order: OrderConfirmation;
+      demo: boolean;
+      clientSecret: string | null;
+      confirmationToken: string | null;
+    };
     expect(first.status).toBe(200);
     expect(firstBody.demo).toBe(true);
     expect(firstBody.clientSecret).toBeNull();
     expect(firstBody.order.status).toBe("demo");
     expect(firstBody.order.status).not.toBe("confirmed");
     expect(firstBody.order.id).toMatch(/^IQ-[A-F0-9]{12}$/);
+    expect(firstBody.order).not.toHaveProperty("email");
+    expect(firstBody.order).not.toHaveProperty("shippingAddress");
+    expect(firstBody.confirmationToken).toEqual(expect.any(String));
+
+    const hidden = await readOrder(new Request(`https://store.iquee.tech/api/orders/${firstBody.order.id}`), {
+      params: Promise.resolve({ id: firstBody.order.id }),
+    });
+    expect(hidden.status).toBe(404);
+
+    const visible = await readOrder(
+      new Request(`https://store.iquee.tech/api/orders/${firstBody.order.id}`, {
+        headers: { "x-confirmation-token": firstBody.confirmationToken ?? "" },
+      }),
+      { params: Promise.resolve({ id: firstBody.order.id }) },
+    );
+    const visibleBody = (await visible.json()) as { order: OrderConfirmation };
+    expect(visible.status).toBe(200);
+    expect(visibleBody.order).not.toHaveProperty("email");
+    expect(visibleBody.order).not.toHaveProperty("shippingAddress");
+    expect(visibleBody.order.status).toBe("demo");
 
     const second = await checkout(checkoutRequest(checkoutBody(), "demo-key-0000000001"));
     const secondBody = (await second.json()) as { order: Order };
@@ -133,11 +162,47 @@ describe("checkout guards", () => {
 
   it("refuses to mint a PaymentIntent when Stripe is only partly configured", async () => {
     delete process.env.CHECKOUT_DEMO;
+    process.env.WC_BASE_URL = "https://woo.iquee.tech";
+    process.env.WC_CONSUMER_KEY = "ck_test";
+    process.env.WC_CONSUMER_SECRET = "cs_test";
     process.env.STRIPE_SECRET_KEY = secretKey;
     delete process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY;
-    const response = await checkout(checkoutRequest(checkoutBody(), "partial-key-00000001"));
-    expect(response.status).toBe(503);
-    expect(getOrder).toBeTypeOf("function");
+    try {
+      const response = await checkout(checkoutRequest(checkoutBody(), "partial-key-00000001"));
+      expect(response.status).toBe(503);
+    } finally {
+      delete process.env.WC_BASE_URL;
+      delete process.env.WC_CONSUMER_KEY;
+      delete process.env.WC_CONSUMER_SECRET;
+    }
+  });
+
+  it("keeps demo mode without Woo and clears the cart only when confirmed", () => {
+    delete process.env.CHECKOUT_DEMO;
+    delete process.env.STRIPE_SECRET_KEY;
+    delete process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY;
+    expect(checkoutMode({ woo: false })).toBe("demo");
+    expect(checkoutMode({ woo: true })).toBe("demo");
+    process.env.STRIPE_SECRET_KEY = secretKey;
+    process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY = "publishable-example";
+    expect(checkoutMode({ woo: true })).toBe("stripe");
+    expect(checkoutMode({ woo: false })).toBe("demo");
+    expect(shouldClearCart("confirmed")).toBe(true);
+    expect(shouldClearCart("processing")).toBe(false);
+    expect(shouldClearCart("succeeded")).toBe(false);
+    expect(shouldClearCart("pending")).toBe(false);
+
+    const body = wooPendingOrderBody({
+      ...pendingOrder(),
+      demo: false,
+      status: "pending",
+      confirmationToken: "token",
+      items: [{ name: "Merino Crew", quantity: 1, unitPrice: 72, attributes: {}, productId: 1001 }],
+    });
+    expect(body.status).toBe("pending");
+    expect(body.set_paid).toBe(false);
+    expect(body.line_items[0]?.product_id).toBe(1001);
+    expect(body.meta_data.some((entry) => entry.key === "_iquee_confirmation_token")).toBe(true);
   });
 });
 
@@ -199,9 +264,9 @@ describe("stripe webhook", () => {
     expect(getOrder(order.id)?.status).toBe("confirmed");
   });
 
-  it("does not confirm a mismatched amount, a demo order, or a failed payment", () => {
+  it("does not confirm a mismatched amount, a demo order, or a failed payment", async () => {
     const order = saveOrder(pendingOrder());
-    const mismatch = applyStripePaymentEvent({
+    const mismatch = await applyStripePaymentEvent({
       type: "payment_intent.succeeded",
       data: {
         object: {
@@ -217,7 +282,7 @@ describe("stripe webhook", () => {
     expect(getOrder(order.id)?.status).toBe("pending");
 
     const demo = saveOrder({ ...pendingOrder(), id: "IQ-112233445566", status: "demo", demo: true });
-    const ignored = applyStripePaymentEvent({
+    const ignored = await applyStripePaymentEvent({
       type: "payment_intent.succeeded",
       data: {
         object: {
@@ -232,7 +297,7 @@ describe("stripe webhook", () => {
     expect(ignored.reason).toBe("demo");
     expect(getOrder(demo.id)?.status).toBe("demo");
 
-    applyStripePaymentEvent({
+    await applyStripePaymentEvent({
       type: "payment_intent.payment_failed",
       data: {
         object: {

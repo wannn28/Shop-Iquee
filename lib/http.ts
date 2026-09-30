@@ -12,7 +12,7 @@ export function apiHeaders(): HeadersInit {
   return {
     "Access-Control-Allow-Origin": siteUrl(),
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization, Cart-Token, Idempotency-Key",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization, Cart-Token, Idempotency-Key, X-Confirmation-Token",
     "Access-Control-Allow-Credentials": "true",
     Vary: "Origin",
     "Cache-Control": "no-store",

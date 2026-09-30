@@ -116,9 +116,13 @@ export function checkoutFingerprint(input: CheckoutInput, total: number) {
   });
 }
 
-/** Stripe keys take a real payment. CHECKOUT_DEMO=true forces a no-charge preview. */
-export function checkoutMode(): "demo" | "stripe" | "misconfigured" {
+/**
+ * A charge is only started when Woo can store the order and both Stripe keys exist.
+ * Otherwise checkout stays an explicit no-charge demo. CHECKOUT_DEMO=true forces demo.
+ */
+export function checkoutMode(input: { woo: boolean }): "demo" | "stripe" | "misconfigured" {
   if (process.env.CHECKOUT_DEMO === "true") return "demo";
+  if (!input.woo) return "demo";
   const secret = Boolean(process.env.STRIPE_SECRET_KEY?.trim());
   const publishable = Boolean(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY?.trim());
   if (secret && publishable) return "stripe";
@@ -163,6 +167,8 @@ export function priceCheckout(products: Product[], items: CheckoutItemInput[]) {
 
     lines.push({
       name: product.name,
+      productId: product.id,
+      variationId: item.variationId,
       quantity: item.quantity,
       unitPrice,
       attributes,

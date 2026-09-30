@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/Button";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Field } from "@/components/ui/Input";
 import { luhnValid, validateCheckout } from "@/lib/checkout";
-import type { CartLine, Order } from "@/lib/types";
+import type { CartLine, OrderConfirmation, ShippingAddress } from "@/lib/types";
 import { useCart } from "@/store/cart";
 
 const ORDER_PATH = "/checkout/confirmation";
@@ -19,12 +19,18 @@ const publishableKey = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY?.trim() ??
 const stripePromise = publishableKey ? loadStripe(publishableKey) : null;
 
 type CheckoutResponse = {
-  order?: Order;
+  order?: OrderConfirmation;
+  confirmationToken?: string | null;
   demo?: boolean;
   paid?: boolean;
   clientSecret?: string | null;
   error?: string;
   fields?: Record<string, string>;
+};
+
+type CheckoutDetails = {
+  email: string;
+  shipping: ShippingAddress;
 };
 
 export function CheckoutForm() {
@@ -69,7 +75,7 @@ function DemoCheckout({ items }: { items: CartLine[] }) {
     if (!/^\d{2}\s*\/\s*\d{2}$/.test(card.exp.trim())) cardErrors.cardExp = "Use MM / YY.";
     if (!/^\d{3,4}$/.test(card.cvc.trim())) cardErrors.cardCvc = "Enter the security code.";
     await flow.submit(event, cardErrors, async () => {
-      /* Demo responses are not charges. The cart stays put. */
+      /* Demo responses are not charges. The cart stays until a confirmed order exists. */
     });
   }
 
@@ -130,7 +136,6 @@ function DemoCheckout({ items }: { items: CartLine[] }) {
 function StripeCheckout({ items }: { items: CartLine[] }) {
   const stripe = useStripe();
   const elements = useElements();
-  const clear = useCart((state) => state.clear);
   const flow = useCheckoutFlow(items);
   const [cardError, setCardError] = useState<string | null>(null);
   const [cardComplete, setCardComplete] = useState(false);
@@ -141,23 +146,19 @@ function StripeCheckout({ items }: { items: CartLine[] }) {
       flow.setErrors((current) => ({ ...current, card: cardError ?? "Enter the card details." }));
       return;
     }
-    await flow.submit(event, {}, async (data) => {
-      if (data.demo) return;
-      if (data.paid) {
-        clear();
-        return;
-      }
+    await flow.submit(event, {}, async (data, details) => {
+      if (data.demo || data.paid || !data.clientSecret) return;
       const card = elements?.getElement(CardElement);
-      if (!stripe || !card || !data.clientSecret || !data.order) {
+      if (!stripe || !card || !data.order) {
         throw new Error("Payment could not be confirmed. Your cart is unchanged.");
       }
-      const shipping = data.order.shippingAddress;
+      const shipping = details.shipping;
       const result = await stripe.confirmCardPayment(data.clientSecret, {
         payment_method: {
           card,
           billing_details: {
             name: `${shipping.firstName} ${shipping.lastName}`,
-            email: data.order.email,
+            email: details.email,
             address: {
               line1: shipping.line1,
               line2: shipping.line2,
@@ -177,7 +178,6 @@ function StripeCheckout({ items }: { items: CartLine[] }) {
       if (status !== "succeeded" && status !== "processing") {
         throw new Error("Payment was not completed. Your cart is unchanged.");
       }
-      clear();
     });
   }
 
@@ -187,7 +187,7 @@ function StripeCheckout({ items }: { items: CartLine[] }) {
       errors={flow.errors}
       pending={flow.pending}
       submitLabel={flow.pending ? "Confirming payment…" : "Pay now"}
-      note="The card is confirmed with Stripe before the cart is cleared. This order is confirmed only after Stripe reports the charge."
+      note="The card is sent to Stripe. The cart stays until this server reports the order confirmed."
       onSubmit={onSubmit}
       payment={
         <div>
@@ -229,7 +229,7 @@ function useCheckoutFlow(items: CartLine[]) {
   async function submit(
     event: React.FormEvent<HTMLFormElement>,
     extraErrors: Record<string, string>,
-    afterAccept: (data: CheckoutResponse) => Promise<void>,
+    afterAccept: (data: CheckoutResponse, details: CheckoutDetails) => Promise<void>,
   ) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
@@ -278,7 +278,10 @@ function useCheckoutFlow(items: CartLine[]) {
         setPending(false);
         return;
       }
-      await afterAccept(data);
+      if (data.confirmationToken) {
+        sessionStorage.setItem(`iquee-confirm:${data.order.id}`, data.confirmationToken);
+      }
+      await afterAccept(data, { email: payload.email, shipping: payload.shipping });
       router.push(`${ORDER_PATH}?order=${data.order.id}`);
     } catch (error) {
       setErrors({ form: error instanceof Error ? error.message : "Network error. Try again." });

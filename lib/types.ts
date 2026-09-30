@@ -91,6 +91,8 @@ export type OrderLine = {
   quantity: number;
   unitPrice: number;
   attributes: Record<string, string>;
+  productId?: number;
+  variationId?: string;
 };
 
 export type OrderStatus = "demo" | "pending" | "confirmed" | "failed" | "fulfilled" | "cancelled";
@@ -108,4 +110,17 @@ export type Order = {
   total: number;
   currency: string;
   shippingAddress: ShippingAddress;
+};
+
+/** Public confirmation payload. No email or street address. */
+export type OrderConfirmation = {
+  id: string;
+  status: OrderStatus;
+  demo: boolean;
+  currency: string;
+  items: OrderLine[];
+  subtotal: number;
+  shipping: number;
+  total: number;
+  createdAt: string;
 };
