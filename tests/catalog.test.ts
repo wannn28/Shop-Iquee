@@ -47,6 +47,31 @@ describe("checkout pricing", () => {
     expect(result.total).toBe(80);
   });
 
+  it("merges duplicate lines, caps unknown stock, and caps the order total", () => {
+    const split = priceCheckout(products, [
+      { productId: 1001, quantity: 9 },
+      { productId: 1001, quantity: 9 },
+    ]);
+    expect(split.ok).toBe(true);
+    if (!split.ok) return;
+    expect(split.lines).toHaveLength(1);
+    expect(split.lines[0]?.quantity).toBe(18);
+
+    const overStock = priceCheckout(products, [
+      { productId: 1001, quantity: 10 },
+      { productId: 1001, quantity: 10 },
+    ]);
+    expect(overStock.ok).toBe(false);
+
+    const openStock = { ...products[0]!, id: 4242, stockQuantity: null, variations: [] };
+    expect(priceCheckout([openStock], [{ productId: 4242, quantity: 100 }]).ok).toBe(false);
+    const capped = priceCheckout([openStock], [{ productId: 4242, quantity: 99 }]);
+    expect(capped.ok).toBe(true);
+
+    const expensive = { ...products[0]!, id: 4243, price: "500.00", stockQuantity: 99, variations: [] };
+    expect(priceCheckout([expensive], [{ productId: 4243, quantity: 50 }]).ok).toBe(false);
+  });
+
   it("rejects an unknown variant and an out of stock product", () => {
     expect(priceCheckout(products, [{ productId: 1005, quantity: 1 }]).ok).toBe(false);
     expect(priceCheckout(products, [{ productId: 1004, quantity: 1 }]).ok).toBe(false);

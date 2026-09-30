@@ -1,7 +1,9 @@
 "use client";
 
+import { CardElement, Elements, useElements, useStripe } from "@stripe/react-stripe-js";
+import { loadStripe } from "@stripe/stripe-js";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import { ExpressPay } from "@/components/checkout/ExpressPay";
 import { OrderSummary } from "@/components/checkout/OrderSummary";
@@ -9,19 +11,24 @@ import { Button } from "@/components/ui/Button";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Field } from "@/components/ui/Input";
 import { luhnValid, validateCheckout } from "@/lib/checkout";
-import type { Order } from "@/lib/types";
+import type { CartLine, Order } from "@/lib/types";
 import { useCart } from "@/store/cart";
 
-const ORDER_KEY = "iquee-order";
+const ORDER_PATH = "/checkout/confirmation";
+const publishableKey = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY?.trim() ?? "";
+const stripePromise = publishableKey ? loadStripe(publishableKey) : null;
+
+type CheckoutResponse = {
+  order?: Order;
+  demo?: boolean;
+  paid?: boolean;
+  clientSecret?: string | null;
+  error?: string;
+  fields?: Record<string, string>;
+};
 
 export function CheckoutForm() {
-  const router = useRouter();
   const items = useCart((state) => state.items);
-  const clear = useCart((state) => state.clear);
-  const [errors, setErrors] = useState<Record<string, string>>({});
-  const [pending, setPending] = useState(false);
-  const [card, setCard] = useState({ name: "", number: "", exp: "", cvc: "" });
-
   if (items.length === 0) {
     return (
       <EmptyState
@@ -32,7 +39,198 @@ export function CheckoutForm() {
     );
   }
 
+  if (!stripePromise) {
+    return <DemoCheckout items={items} />;
+  }
+
+  return (
+    <Elements
+      stripe={stripePromise}
+      options={{
+        appearance: {
+          theme: "stripe",
+          variables: { colorPrimary: "#111111", colorText: "#111111", borderRadius: "8px", fontFamily: "Inter, sans-serif" },
+        },
+      }}
+    >
+      <StripeCheckout items={items} />
+    </Elements>
+  );
+}
+
+function DemoCheckout({ items }: { items: CartLine[] }) {
+  const [card, setCard] = useState({ name: "", number: "", exp: "", cvc: "" });
+  const flow = useCheckoutFlow(items);
+
   async function onSubmit(event: React.FormEvent<HTMLFormElement>) {
+    const cardErrors: Record<string, string> = {};
+    if (card.name.trim().length < 2) cardErrors.cardName = "Enter the name on the card.";
+    if (!luhnValid(card.number)) cardErrors.cardNumber = "Enter a valid card number.";
+    if (!/^\d{2}\s*\/\s*\d{2}$/.test(card.exp.trim())) cardErrors.cardExp = "Use MM / YY.";
+    if (!/^\d{3,4}$/.test(card.cvc.trim())) cardErrors.cardCvc = "Enter the security code.";
+    await flow.submit(event, cardErrors, async () => {
+      /* Demo responses are not charges. The cart stays put. */
+    });
+  }
+
+  return (
+    <CheckoutLayout
+      items={items}
+      errors={flow.errors}
+      pending={flow.pending}
+      submitLabel={flow.pending ? "Saving preview…" : "Preview demo order"}
+      note="Demo checkout. Card details stay in this browser and are not sent. No charge is made, and the order is not confirmed."
+      onSubmit={onSubmit}
+      payment={
+        <>
+          <Field
+            label="Name on card"
+            name="cardName"
+            autoComplete="cc-name"
+            value={card.name}
+            onChange={(event) => setCard((current) => ({ ...current, name: event.target.value }))}
+            error={flow.errors.cardName}
+          />
+          <Field
+            label="Card number"
+            name="cardNumber"
+            inputMode="numeric"
+            autoComplete="cc-number"
+            placeholder="4242 4242 4242 4242"
+            value={card.number}
+            onChange={(event) => setCard((current) => ({ ...current, number: event.target.value }))}
+            error={flow.errors.cardNumber}
+          />
+          <div className="grid grid-cols-2 gap-4">
+            <Field
+              label="Expiry"
+              name="cardExp"
+              autoComplete="cc-exp"
+              placeholder="MM / YY"
+              value={card.exp}
+              onChange={(event) => setCard((current) => ({ ...current, exp: event.target.value }))}
+              error={flow.errors.cardExp}
+            />
+            <Field
+              label="CVC"
+              name="cardCvc"
+              inputMode="numeric"
+              autoComplete="cc-csc"
+              value={card.cvc}
+              onChange={(event) => setCard((current) => ({ ...current, cvc: event.target.value }))}
+              error={flow.errors.cardCvc}
+            />
+          </div>
+        </>
+      }
+    />
+  );
+}
+
+function StripeCheckout({ items }: { items: CartLine[] }) {
+  const stripe = useStripe();
+  const elements = useElements();
+  const clear = useCart((state) => state.clear);
+  const flow = useCheckoutFlow(items);
+  const [cardError, setCardError] = useState<string | null>(null);
+  const [cardComplete, setCardComplete] = useState(false);
+
+  async function onSubmit(event: React.FormEvent<HTMLFormElement>) {
+    if (!cardComplete) {
+      event.preventDefault();
+      flow.setErrors((current) => ({ ...current, card: cardError ?? "Enter the card details." }));
+      return;
+    }
+    await flow.submit(event, {}, async (data) => {
+      if (data.demo) return;
+      if (data.paid) {
+        clear();
+        return;
+      }
+      const card = elements?.getElement(CardElement);
+      if (!stripe || !card || !data.clientSecret || !data.order) {
+        throw new Error("Payment could not be confirmed. Your cart is unchanged.");
+      }
+      const shipping = data.order.shippingAddress;
+      const result = await stripe.confirmCardPayment(data.clientSecret, {
+        payment_method: {
+          card,
+          billing_details: {
+            name: `${shipping.firstName} ${shipping.lastName}`,
+            email: data.order.email,
+            address: {
+              line1: shipping.line1,
+              line2: shipping.line2,
+              city: shipping.city,
+              state: shipping.region,
+              postal_code: shipping.postalCode,
+              country: shipping.country,
+            },
+          },
+        },
+        return_url: `${window.location.origin}${ORDER_PATH}?order=${data.order.id}`,
+      });
+      if (result.error) {
+        throw new Error(result.error.message ?? "Payment was not completed. Your cart is unchanged.");
+      }
+      const status = result.paymentIntent?.status;
+      if (status !== "succeeded" && status !== "processing") {
+        throw new Error("Payment was not completed. Your cart is unchanged.");
+      }
+      clear();
+    });
+  }
+
+  return (
+    <CheckoutLayout
+      items={items}
+      errors={flow.errors}
+      pending={flow.pending}
+      submitLabel={flow.pending ? "Confirming payment…" : "Pay now"}
+      note="The card is confirmed with Stripe before the cart is cleared. This order is confirmed only after Stripe reports the charge."
+      onSubmit={onSubmit}
+      payment={
+        <div>
+          <p className="type-small">Card</p>
+          <div className="mt-1 rounded-input border border-border bg-bg px-3 py-3">
+            <CardElement
+              options={{
+                hidePostalCode: true,
+                style: {
+                  base: { fontSize: "16px", color: "#111111", "::placeholder": { color: "#6B6B6B" } },
+                  invalid: { color: "#DC2626" },
+                },
+              }}
+              onChange={(event) => {
+                setCardComplete(event.complete);
+                setCardError(event.error?.message ?? null);
+              }}
+            />
+          </div>
+          {flow.errors.card ? <p className="mt-1 type-small text-error">{flow.errors.card}</p> : null}
+        </div>
+      }
+    />
+  );
+}
+
+function useCheckoutFlow(items: CartLine[]) {
+  const router = useRouter();
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [pending, setPending] = useState(false);
+  const signature = items.map((item) => `${item.lineId}:${item.quantity}`).join("|");
+  const signatureRef = useRef(signature);
+  const idempotencyKey = useRef(crypto.randomUUID());
+  if (signatureRef.current !== signature) {
+    signatureRef.current = signature;
+    idempotencyKey.current = crypto.randomUUID();
+  }
+
+  async function submit(
+    event: React.FormEvent<HTMLFormElement>,
+    extraErrors: Record<string, string>,
+    afterAccept: (data: CheckoutResponse) => Promise<void>,
+  ) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     const payload = {
@@ -56,46 +254,58 @@ export function CheckoutForm() {
       })),
     };
 
-    const cardErrors: Record<string, string> = {};
-    if (card.name.trim().length < 2) cardErrors.cardName = "Enter the name on the card.";
-    if (!luhnValid(card.number)) cardErrors.cardNumber = "Enter a valid card number.";
-    if (!/^\d{2}\s*\/\s*\d{2}$/.test(card.exp.trim())) cardErrors.cardExp = "Use MM / YY.";
-    if (!/^\d{3,4}$/.test(card.cvc.trim())) cardErrors.cardCvc = "Enter the security code.";
-
     const validated = validateCheckout(payload);
     const nextErrors = {
       ...(validated.ok ? {} : validated.fields),
-      ...cardErrors,
+      ...extraErrors,
     };
     setErrors(nextErrors);
-    if (!validated.ok || Object.keys(cardErrors).length > 0) return;
+    if (!validated.ok || Object.keys(extraErrors).length > 0) return;
 
     setPending(true);
     try {
       const response = await fetch("/api/checkout", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": idempotencyKey.current,
+        },
         body: JSON.stringify(payload),
       });
-      const data = (await response.json()) as {
-        order?: Order;
-        error?: string;
-        fields?: Record<string, string>;
-      };
+      const data = (await response.json()) as CheckoutResponse;
       if (!response.ok || !data.order) {
         setErrors(data.fields ?? { form: data.error ?? "Checkout could not be completed." });
         setPending(false);
         return;
       }
-      sessionStorage.setItem(`${ORDER_KEY}:${data.order.id}`, JSON.stringify(data.order));
-      clear();
-      router.push(`/checkout/confirmation?order=${data.order.id}`);
-    } catch {
-      setErrors({ form: "Network error. Try again." });
+      await afterAccept(data);
+      router.push(`${ORDER_PATH}?order=${data.order.id}`);
+    } catch (error) {
+      setErrors({ form: error instanceof Error ? error.message : "Network error. Try again." });
       setPending(false);
     }
   }
 
+  return { errors, setErrors, pending, submit };
+}
+
+function CheckoutLayout({
+  items,
+  errors,
+  pending,
+  submitLabel,
+  note,
+  onSubmit,
+  payment,
+}: {
+  items: CartLine[];
+  errors: Record<string, string>;
+  pending: boolean;
+  submitLabel: string;
+  note: string;
+  onSubmit: (event: React.FormEvent<HTMLFormElement>) => void;
+  payment: React.ReactNode;
+}) {
   return (
     <form onSubmit={onSubmit} className="grid gap-8 lg:grid-cols-[minmax(0,640px)_320px] lg:justify-between" noValidate>
       <div className="space-y-8">
@@ -153,51 +363,12 @@ export function CheckoutForm() {
 
         <section className="space-y-4">
           <h2 className="type-h2">Payment</h2>
-          <p className="type-small text-fg-muted">
-            Card details stay in the browser. Demo checkout confirms the order without a charge until Stripe is configured.
-          </p>
-          <Field
-            label="Name on card"
-            name="cardName"
-            autoComplete="cc-name"
-            value={card.name}
-            onChange={(event) => setCard((current) => ({ ...current, name: event.target.value }))}
-            error={errors.cardName}
-          />
-          <Field
-            label="Card number"
-            name="cardNumber"
-            inputMode="numeric"
-            autoComplete="cc-number"
-            placeholder="4242 4242 4242 4242"
-            value={card.number}
-            onChange={(event) => setCard((current) => ({ ...current, number: event.target.value }))}
-            error={errors.cardNumber}
-          />
-          <div className="grid grid-cols-2 gap-4">
-            <Field
-              label="Expiry"
-              name="cardExp"
-              autoComplete="cc-exp"
-              placeholder="MM / YY"
-              value={card.exp}
-              onChange={(event) => setCard((current) => ({ ...current, exp: event.target.value }))}
-              error={errors.cardExp}
-            />
-            <Field
-              label="CVC"
-              name="cardCvc"
-              inputMode="numeric"
-              autoComplete="cc-csc"
-              value={card.cvc}
-              onChange={(event) => setCard((current) => ({ ...current, cvc: event.target.value }))}
-              error={errors.cardCvc}
-            />
-          </div>
+          <p className="type-small text-fg-muted">{note}</p>
+          {payment}
         </section>
 
         <Button type="submit" size="lg" className="w-full" disabled={pending}>
-          {pending ? "Placing order…" : "Place order"}
+          {submitLabel}
         </Button>
       </div>
       <OrderSummary items={items} />

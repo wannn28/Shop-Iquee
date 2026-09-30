@@ -5,7 +5,7 @@ import { Confirmation } from "@/components/checkout/Confirmation";
 import { Container } from "@/components/ui/Container";
 
 export const metadata: Metadata = {
-  title: "Order confirmed",
+  title: "Order status",
 };
 
 export default function ConfirmationPage() {

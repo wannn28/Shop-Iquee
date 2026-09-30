@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import Stripe from "stripe";
 
+import { applyStripePaymentEvent } from "@/lib/payments";
+
 /** Stripe webhook receiver at https://store.iquee.tech/api/webhooks/stripe */
 export async function POST(request: Request) {
   const secret = process.env.STRIPE_WEBHOOK_SECRET?.trim();
@@ -15,12 +17,15 @@ export async function POST(request: Request) {
   }
 
   const raw = await request.text();
+  let event: Stripe.Event;
   try {
     const stripe = new Stripe(key);
-    const event = stripe.webhooks.constructEvent(raw, signature, secret);
-    return NextResponse.json({ received: true, type: event.type });
+    event = stripe.webhooks.constructEvent(raw, signature, secret);
   } catch (error) {
     console.warn("Stripe webhook rejected", error);
     return NextResponse.json({ error: "Invalid signature" }, { status: 400 });
   }
+
+  const result = applyStripePaymentEvent(event);
+  return NextResponse.json({ received: true, updated: result.updated, reason: result.reason });
 }

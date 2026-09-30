@@ -7,6 +7,7 @@ import { Price } from "@/components/product/Price";
 import { QtyStepper } from "@/components/product/QtyStepper";
 import { ProductImage } from "@/components/product/ProductImage";
 import { buttonClass } from "@/components/ui/Button";
+import { availableQuantity } from "@/lib/limits";
 import { FREE_SHIPPING_THRESHOLD, formatPrice, shippingAmount } from "@/lib/money";
 import { cartSubtotal, useCart } from "@/store/cart";
 
@@ -131,7 +132,7 @@ export function CartDrawer() {
                     <div className="mt-3 flex items-center justify-between">
                       <QtyStepper
                         value={item.quantity}
-                        max={item.stockQuantity ?? undefined}
+                        max={availableQuantity(item.stockQuantity)}
                         onChange={(quantity) => updateQty(item.lineId, quantity)}
                         label={`Quantity for ${item.name}`}
                       />

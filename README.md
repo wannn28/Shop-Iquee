@@ -2,7 +2,7 @@
 
 Headless storefront for [store.iquee.tech](https://store.iquee.tech). WooCommerce stays on [woo.iquee.tech](https://woo.iquee.tech). The browser never calls `/wp-json/wc/v3`.
 
-The UI runs on local fixtures until `WC_BASE_URL`, `WC_CONSUMER_KEY`, and `WC_CONSUMER_SECRET` are set. Checkout confirms in demo mode until `STRIPE_SECRET_KEY` is set.
+The UI runs on local fixtures until `WC_BASE_URL`, `WC_CONSUMER_KEY`, and `WC_CONSUMER_SECRET` are set. Checkout is not production-ready: without both Stripe keys it is an explicit demo and never marks an order confirmed.
 
 ## Stack
 
@@ -45,7 +45,8 @@ Demo card that passes format checks and is not charged: `4242 4242 4242 4242`, a
 | `WC_WEBHOOK_SECRET` | Server | HMAC secret for `/api/webhooks/woocommerce`. |
 | `STRIPE_SECRET_KEY` | Server | Creates a PaymentIntent at checkout when present. |
 | `STRIPE_WEBHOOK_SECRET` | Server | Verifies `/api/webhooks/stripe`. |
-| `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` | Public | Reserved for Stripe wallets. Express Pay stays disabled until those buttons are wired. |
+| `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` | Public | Stripe.js. Required with the secret key before a card can be confirmed. Express Pay stays disabled until wallets are wired. |
+| `CHECKOUT_DEMO` | Server | Set to `true` for a no-charge preview. Demo orders stay `demo` and are never confirmed. |
 
 Copy `.env.example` to `.env.local`. Do not prefix the WooCommerce secrets or Stripe secret with `NEXT_PUBLIC_`.
 
@@ -97,13 +98,17 @@ store/cart.ts        Zustand cart (local, persisted)
 
 When WooCommerce credentials are set, catalog routes try REST and fall back to fixtures if the request fails. Cart UI state stays in Zustand. `GET/POST /api/cart` is the sync point: send `Cart-Token` and it proxies `wc/store/v1` when `WC_BASE_URL` is set.
 
-Checkout reprices lines from the catalog. Card numbers are validated in the browser and are not posted. Without `STRIPE_SECRET_KEY`, the order is confirmed in demo mode. With a secret key, the route creates a PaymentIntent and the order stays `pending`.
+Checkout reprices and merges lines on the server, caps each line at 99 (unknown stock is not unlimited), and refuses another site's `Origin`. Requests need an `Idempotency-Key` and are rate limited per process. Card numbers are not posted to this app.
+
+With both Stripe keys and `CHECKOUT_DEMO` unset, the browser confirms the PaymentIntent with Stripe.js before the cart is cleared. The order stays `pending` until `/api/webhooks/stripe` verifies the signature and the succeeded intent amount matches the stored total. That stored order lives in process memory, so this is not durable production checkout.
+
+With `CHECKOUT_DEMO=true`, or with no Stripe keys, the API returns a `demo` order. The confirmation page says no charge was made. The cart is not cleared.
 
 ## What to wire next
 
 1. Set the WooCommerce and Stripe variables in the host environment for `store.iquee.tech`.
 2. Confirm `GET /api/products` returns `source: "woocommerce"`.
 3. Persist Store API `Cart-Token` from `/api/cart` into the Zustand cart.
-4. Mount Stripe Payment Element with the returned `clientSecret`, then mark the order paid from `/api/webhooks/stripe`.
+4. Replace the in-memory order store with a database before treating checkout as production. The webhook already marks a matching PaymentIntent paid.
 5. Replace the account stub with WooCommerce customers. Order history should read `wc/v3` orders for the signed-in customer.
 6. Currency is USD until the BFF reads the WooCommerce currency setting.

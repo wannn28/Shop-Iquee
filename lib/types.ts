@@ -93,13 +93,15 @@ export type OrderLine = {
   attributes: Record<string, string>;
 };
 
-export type OrderStatus = "confirmed" | "pending" | "fulfilled" | "cancelled";
+export type OrderStatus = "demo" | "pending" | "confirmed" | "failed" | "fulfilled" | "cancelled";
 
 export type Order = {
   id: string;
   email: string;
   createdAt: string;
   status: OrderStatus;
+  /** True when no PaymentIntent was created. Demo orders are never confirmed. */
+  demo?: boolean;
   items: OrderLine[];
   subtotal: number;
   shipping: number;

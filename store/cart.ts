@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
+import { availableQuantity } from "@/lib/limits";
 import { cartLineId } from "@/store/line";
 import type { CartLine } from "@/lib/types";
 
@@ -30,10 +31,9 @@ const memoryStorage = {
 };
 
 function cap(quantity: number, stockQuantity: number | null) {
-  if (stockQuantity === 0) return 0;
-  const next = Math.max(1, quantity);
-  if (stockQuantity == null) return next;
-  return Math.min(next, stockQuantity);
+  const ceiling = availableQuantity(stockQuantity);
+  if (ceiling < 1) return 0;
+  return Math.min(Math.max(1, quantity), ceiling);
 }
 
 export const useCart = create<CartState>()(

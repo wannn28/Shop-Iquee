@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/Button";
 import { Price } from "@/components/product/Price";
 import { QtyStepper } from "@/components/product/QtyStepper";
 import { findVariation } from "@/lib/catalog";
+import { availableQuantity } from "@/lib/limits";
 import type { Product } from "@/lib/types";
 import { useCart } from "@/store/cart";
 
@@ -100,7 +101,7 @@ export function AddToCart({ product }: { product: Product }) {
       <div className="mt-5 hidden items-center gap-3 md:flex">
         <QtyStepper
           value={quantity}
-          max={stockQuantity ?? undefined}
+          max={availableQuantity(stockQuantity)}
           onChange={setQuantity}
         />
         <Button size="lg" className="min-w-48 flex-1" onClick={add} disabled={soldOut && !needsOptions}>
@@ -115,7 +116,7 @@ export function AddToCart({ product }: { product: Product }) {
 
       <div className="fixed inset-x-0 bottom-0 z-30 border-t border-border bg-bg px-4 pt-4 pb-[max(1rem,env(safe-area-inset-bottom))] md:hidden">
         <div className="mx-auto flex max-w-[1280px] items-center gap-3">
-          <QtyStepper value={quantity} max={stockQuantity ?? undefined} onChange={setQuantity} />
+          <QtyStepper value={quantity} max={availableQuantity(stockQuantity)} onChange={setQuantity} />
           <Button size="lg" className="flex-1" onClick={add} disabled={soldOut && !needsOptions}>
             {soldOut && !needsOptions ? "Sold out" : "Add to cart"}
           </Button>

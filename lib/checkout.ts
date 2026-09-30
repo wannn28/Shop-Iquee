@@ -1,3 +1,4 @@
+import { availableQuantity, MAX_ORDER_TOTAL } from "@/lib/limits";
 import { shippingAmount } from "@/lib/money";
 import type { Product, ShippingAddress } from "@/lib/types";
 
@@ -84,9 +85,50 @@ export function validateCheckout(
   };
 }
 
+export function mergeCheckoutItems(items: CheckoutItemInput[]) {
+  const merged = new Map<string, CheckoutItemInput>();
+  for (const item of items) {
+    const key = `${item.productId}:${item.variationId ?? ""}`;
+    const existing = merged.get(key);
+    if (existing) {
+      existing.quantity += item.quantity;
+    } else {
+      merged.set(key, { ...item });
+    }
+  }
+  return [...merged.values()];
+}
+
+export function checkoutFingerprint(input: CheckoutInput, total: number) {
+  const items = mergeCheckoutItems(input.items)
+    .map((item) => ({
+      productId: item.productId,
+      variationId: item.variationId ?? "",
+      quantity: item.quantity,
+    }))
+    .sort((a, b) => `${a.productId}:${a.variationId}`.localeCompare(`${b.productId}:${b.variationId}`));
+  return JSON.stringify({
+    email: input.email,
+    phone: input.phone ?? "",
+    shipping: input.shipping,
+    items,
+    total: Math.round(total * 100),
+  });
+}
+
+/** Stripe keys take a real payment. CHECKOUT_DEMO=true forces a no-charge preview. */
+export function checkoutMode(): "demo" | "stripe" | "misconfigured" {
+  if (process.env.CHECKOUT_DEMO === "true") return "demo";
+  const secret = Boolean(process.env.STRIPE_SECRET_KEY?.trim());
+  const publishable = Boolean(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY?.trim());
+  if (secret && publishable) return "stripe";
+  if (!secret && !publishable) return "demo";
+  return "misconfigured";
+}
+
 export function priceCheckout(products: Product[], items: CheckoutItemInput[]) {
   const lines = [];
-  for (const item of items) {
+  for (const item of mergeCheckoutItems(items)) {
     const product = products.find((entry) => entry.id === item.productId);
     if (!product) {
       return { ok: false as const, error: "A product in your cart is no longer available." };
@@ -108,11 +150,15 @@ export function priceCheckout(products: Product[], items: CheckoutItemInput[]) {
       stockQuantity = variation.stockQuantity;
     }
 
-    if (stockStatus === "outofstock") {
+    const available = stockStatus === "outofstock" ? 0 : availableQuantity(stockQuantity);
+    if (available < 1) {
       return { ok: false as const, error: `${product.name} is out of stock.` };
     }
-    if (stockQuantity != null && item.quantity > stockQuantity) {
-      return { ok: false as const, error: `Only ${stockQuantity} of ${product.name} are available.` };
+    if (item.quantity > available) {
+      return {
+        ok: false as const,
+        error: `Only ${available} of ${product.name} can be ordered.`,
+      };
     }
 
     lines.push({
@@ -125,12 +171,16 @@ export function priceCheckout(products: Product[], items: CheckoutItemInput[]) {
 
   const subtotal = lines.reduce((sum, line) => sum + line.unitPrice * line.quantity, 0);
   const shipping = shippingAmount(subtotal);
+  const total = subtotal + shipping;
+  if (total > MAX_ORDER_TOTAL) {
+    return { ok: false as const, error: `Orders are limited to $${MAX_ORDER_TOTAL}.` };
+  }
   return {
     ok: true as const,
     lines,
     subtotal,
     shipping,
-    total: subtotal + shipping,
+    total,
     currency: "USD",
   };
 }

@@ -54,4 +54,9 @@ describe("cart store", () => {
     useCart.getState().addItem({ ...tee, stockQuantity: 0 });
     expect(useCart.getState().items.some((line) => line.productId === 1001 && line.stockQuantity === 0)).toBe(false);
   });
+
+  it("caps a line at 99 when stock is unknown", () => {
+    useCart.getState().addItem({ ...tee, productId: 4242, stockQuantity: null, quantity: 200 });
+    expect(useCart.getState().items[0]?.quantity).toBe(99);
+  });
 });
