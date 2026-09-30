@@ -4,6 +4,7 @@ import { ProductGrid } from "@/components/product/ProductCard";
 import { ProductImage } from "@/components/product/ProductImage";
 import { buttonClass } from "@/components/ui/Button";
 import { Container } from "@/components/ui/Container";
+import { cn } from "@/lib/cn";
 import { getCategories, getFeaturedProducts } from "@/lib/products.server";
 
 export default async function HomePage() {
@@ -12,7 +13,12 @@ export default async function HomePage() {
 
   return (
     <>
-      <Container className="grid min-h-[60vh] items-center gap-10 py-12 md:grid-cols-2 md:py-16 lg:py-20">
+      <Container
+        className={cn(
+          "grid min-h-[60vh] items-center gap-10 py-12 md:py-16 lg:py-20",
+          hero.length > 0 && "md:grid-cols-2",
+        )}
+      >
         <div>
           <p className="type-small text-fg-muted">New season</p>
           <h1 className="type-display mt-4">Everyday objects, considered.</h1>
@@ -28,45 +34,51 @@ export default async function HomePage() {
             </Link>
           </div>
         </div>
-        <div className="grid grid-cols-2 gap-3">
-          {hero.map((product, index) => (
-            <Link key={product.id} href={`/products/${product.slug}`} className="relative aspect-square overflow-hidden rounded-card bg-bg-muted">
-              {product.images[0] ? (
-                <ProductImage
-                  src={product.images[index === 1 ? 1 : 0]?.src ?? product.images[0].src}
-                  alt={product.images[0].alt}
-                  sizes="(min-width: 768px) 25vw, 50vw"
-                  priority={index === 0}
-                />
-              ) : null}
-            </Link>
-          ))}
-        </div>
-      </Container>
-
-      <Container className="pb-12 md:pb-16 lg:pb-20">
-        <div className="mb-6 flex items-end justify-between">
-          <h2 className="type-h2">Featured</h2>
-          <Link href="/products" className="type-small text-fg-muted">
-            View all
-          </Link>
-        </div>
-        <ProductGrid products={featured} />
-      </Container>
-
-      <Container className="pb-12 md:pb-16 lg:pb-20">
-        <h2 className="type-h2">Shop by category</h2>
-        <ul className="mt-6 grid grid-cols-2 gap-3 md:grid-cols-4">
-          {categories.map((category) => (
-            <li key={category.slug}>
-              <Link href={`/products?category=${category.slug}`} className="flex min-h-32 flex-col justify-between rounded-card bg-bg-muted p-5">
-                <span className="type-card">{category.name}</span>
-                <span className="type-small text-fg-muted">{category.description}</span>
+        {hero.length > 0 ? (
+          <div className="grid grid-cols-2 gap-3">
+            {hero.map((product, index) => (
+              <Link key={product.id} href={`/products/${product.slug}`} className="relative aspect-square overflow-hidden rounded-card bg-bg-muted">
+                {product.images[0] ? (
+                  <ProductImage
+                    src={product.images[index === 1 ? 1 : 0]?.src ?? product.images[0].src}
+                    alt={product.images[0].alt}
+                    sizes="(min-width: 768px) 25vw, 50vw"
+                    priority={index === 0}
+                  />
+                ) : null}
               </Link>
-            </li>
-          ))}
-        </ul>
+            ))}
+          </div>
+        ) : null}
       </Container>
+
+      {featured.length > 0 ? (
+        <Container className="pb-12 md:pb-16 lg:pb-20">
+          <div className="mb-6 flex items-end justify-between">
+            <h2 className="type-h2">Featured</h2>
+            <Link href="/products" className="type-small text-fg-muted">
+              View all
+            </Link>
+          </div>
+          <ProductGrid products={featured} />
+        </Container>
+      ) : null}
+
+      {categories.length > 0 ? (
+        <Container className="pb-12 md:pb-16 lg:pb-20">
+          <h2 className="type-h2">Shop by category</h2>
+          <ul className="mt-6 grid grid-cols-2 gap-3 md:grid-cols-4">
+            {categories.map((category) => (
+              <li key={category.slug}>
+                <Link href={`/products?category=${category.slug}`} className="flex min-h-32 flex-col justify-between rounded-card bg-bg-muted p-5">
+                  <span className="type-card">{category.name}</span>
+                  <span className="type-small text-fg-muted">{category.description}</span>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </Container>
+      ) : null}
 
       <Container className="pb-12 md:pb-16 lg:pb-20">
         <ul className="grid gap-4 border-y border-border py-6 md:grid-cols-3">
