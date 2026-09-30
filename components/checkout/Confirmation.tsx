@@ -6,22 +6,16 @@ import { useEffect, useState } from "react";
 
 import { buttonClass } from "@/components/ui/Button";
 import { formatPrice } from "@/lib/money";
-import type { Order } from "@/lib/types";
+import { shouldClearCart } from "@/lib/order-status";
+import type { OrderConfirmation } from "@/lib/types";
 import { useCart } from "@/store/cart";
 
 export function Confirmation() {
   const params = useSearchParams();
   const orderId = params.get("order");
-  const redirectStatus = params.get("redirect_status");
   const clear = useCart((state) => state.clear);
-  const [order, setOrder] = useState<Order | null>(null);
+  const [order, setOrder] = useState<OrderConfirmation | null>(null);
   const [ready, setReady] = useState(false);
-
-  useEffect(() => {
-    if (redirectStatus === "succeeded" || redirectStatus === "processing") {
-      clear();
-    }
-  }, [clear, redirectStatus]);
 
   useEffect(() => {
     if (!orderId) {
@@ -33,17 +27,28 @@ export function Confirmation() {
     let timer = 0;
 
     async function load() {
-      const response = await fetch(`/api/orders/${orderId}`);
+      const token = sessionStorage.getItem(`iquee-confirm:${orderId}`);
+      if (!token) {
+        if (!cancelled) {
+          setOrder(null);
+          setReady(true);
+        }
+        return;
+      }
+      const response = await fetch(`/api/orders/${orderId}`, {
+        headers: { "X-Confirmation-Token": token },
+      });
       if (cancelled) return;
       if (!response.ok) {
         setOrder(null);
         setReady(true);
         return;
       }
-      const data = (await response.json()) as { order?: Order };
+      const data = (await response.json()) as { order?: OrderConfirmation };
       if (cancelled || !data.order) return;
       setOrder(data.order);
       setReady(true);
+      if (shouldClearCart(data.order.status)) clear();
       if (data.order.status === "pending") {
         timer = window.setTimeout(() => {
           void load();
@@ -56,7 +61,7 @@ export function Confirmation() {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [orderId]);
+  }, [clear, orderId]);
 
   if (!ready) {
     return <div className="h-40 animate-pulse rounded-card bg-bg-muted" />;
@@ -68,7 +73,7 @@ export function Confirmation() {
         <h1 className="type-h1">Order not on this server</h1>
         <p className="mt-3 text-fg-muted">
           {orderId
-            ? `${orderId} is not stored. Orders stay in this server process until a database is connected.`
+            ? `${orderId} is not available in this browser. The confirmation token stays in the checkout session.`
             : "Place an order to see a status page."}
         </p>
         <Link href="/products" className={buttonClass({ size: "lg", className: "mt-6" })}>
@@ -110,9 +115,6 @@ export function Confirmation() {
           <dd>{formatPrice(order.total, order.currency)}</dd>
         </div>
       </dl>
-      <p className="mt-6 type-small text-fg-muted">
-        Ships to {order.shippingAddress.line1}, {order.shippingAddress.city} {order.shippingAddress.postalCode}
-      </p>
       <Link href="/products" className={buttonClass({ size: "lg", className: "mt-8" })}>
         Continue shopping
       </Link>
@@ -120,31 +122,31 @@ export function Confirmation() {
   );
 }
 
-function statusCopy(order: Order) {
+function statusCopy(order: OrderConfirmation) {
   if (order.demo || order.status === "demo") {
     return {
       eyebrow: "Demo checkout",
       tone: "text-fg-muted",
-      body: `No charge was made for ${order.email}. This is not a confirmed order.`,
+      body: "No charge was made. This is not a confirmed order.",
     };
   }
   if (order.status === "confirmed") {
     return {
       eyebrow: "Order confirmed",
       tone: "text-success",
-      body: `Stripe confirmed the payment for ${order.email}.`,
+      body: "Stripe confirmed the payment.",
     };
   }
   if (order.status === "failed") {
     return {
       eyebrow: "Payment failed",
       tone: "text-error",
-      body: `Stripe did not capture a payment for ${order.email}.`,
+      body: "Stripe did not capture a payment. The cart was not cleared.",
     };
   }
   return {
     eyebrow: "Payment submitted",
     tone: "text-warning",
-    body: `Stripe has not confirmed this charge for ${order.email} yet. The order is not confirmed.`,
+    body: "Stripe has not confirmed this charge yet. The order is not confirmed, and the cart is unchanged.",
   };
 }

@@ -1,6 +1,8 @@
 import { apiJson, apiOptions } from "@/lib/http";
-import { getOrder, isOrderId } from "@/lib/orders";
+import { ordersStoreFor } from "@/lib/order-store";
+import { confirmationTokenMatches, isOrderId, toOrderConfirmation } from "@/lib/orders";
 import { clientIp, rateLimit } from "@/lib/rate-limit";
+import { wooConfigured } from "@/lib/woo/rest";
 
 export function OPTIONS() {
   return apiOptions();
@@ -17,7 +19,12 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
     return apiJson({ error: "Order not found." }, 404);
   }
 
-  const order = getOrder(id);
-  if (!order) return apiJson({ error: "Order not found." }, 404);
-  return apiJson({ order });
+  const store = ordersStoreFor(wooConfigured() ? "stripe" : "demo");
+  const order = await store.get(id);
+  const token = request.headers.get("x-confirmation-token");
+  if (!order || !confirmationTokenMatches(order.confirmationToken, token)) {
+    return apiJson({ error: "Order not found." }, 404);
+  }
+
+  return apiJson({ order: toOrderConfirmation(order) });
 }

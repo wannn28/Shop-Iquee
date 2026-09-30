@@ -22,7 +22,7 @@ export function wooBaseUrl() {
   return value.replace(/\/$/, "");
 }
 
-export async function wooRest<T>(path: string): Promise<T> {
+export async function wooRest<T>(path: string, init?: { method?: "GET" | "POST" | "PUT"; body?: unknown }): Promise<T> {
   const key = process.env.WC_CONSUMER_KEY?.trim();
   const secret = process.env.WC_CONSUMER_SECRET?.trim();
   if (!process.env.WC_BASE_URL?.trim() || !key || !secret) {
@@ -31,10 +31,13 @@ export async function wooRest<T>(path: string): Promise<T> {
 
   const url = new URL(`/wp-json/wc/v3${path}`, wooBaseUrl());
   const response = await fetch(url, {
+    method: init?.method ?? "GET",
     headers: {
       Accept: "application/json",
+      ...(init?.body ? { "Content-Type": "application/json" } : {}),
       Authorization: `Basic ${Buffer.from(`${key}:${secret}`).toString("base64")}`,
     },
+    body: init?.body ? JSON.stringify(init.body) : undefined,
     cache: "no-store",
     signal: AbortSignal.timeout(5000),
   });
