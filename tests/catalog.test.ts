@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { parseProductQuery, queryProducts } from "@/lib/catalog";
+import { hasActiveFilters, parseProductQuery, queryProducts, resolveListingEmpty } from "@/lib/catalog";
 import { luhnValid, priceCheckout, validateCheckout } from "@/lib/checkout";
 import { products } from "@/lib/fixtures/products";
 import { formatPrice, shippingAmount } from "@/lib/money";
@@ -21,6 +21,71 @@ describe("catalog query", () => {
     const search = queryProducts(products, { q: "merino" });
     expect(search).toHaveLength(1);
     expect(search[0]?.slug).toBe("merino-crew");
+  });
+
+  it("uses empty-catalog copy when the store has no products", () => {
+    expect(
+      resolveListingEmpty({
+        total: 0,
+        matchCount: 0,
+        query: { sort: "featured" },
+        mode: "catalog",
+        basePath: "/products",
+      }),
+    ).toEqual({
+      kind: "empty-catalog",
+      status: "No products yet",
+      title: "Catalog is empty",
+      body: "Products will appear here once added.",
+      action: { href: "/", label: "Home" },
+    });
+
+    expect(
+      resolveListingEmpty({
+        total: 0,
+        matchCount: 0,
+        query: { category: "apparel", sort: "featured" },
+        mode: "catalog",
+        basePath: "/products",
+      })?.action?.label,
+    ).toBe("Home");
+  });
+
+  it("keeps filter-empty copy when products exist but nothing matches", () => {
+    expect(hasActiveFilters({ sort: "featured" })).toBe(false);
+    expect(hasActiveFilters({ category: "apparel", sort: "featured" })).toBe(true);
+    expect(
+      resolveListingEmpty({
+        total: 12,
+        matchCount: 0,
+        query: { category: "apparel", sort: "featured" },
+        mode: "catalog",
+        basePath: "/products",
+      }),
+    ).toMatchObject({
+      kind: "no-match",
+      status: "0 products",
+      title: "Nothing matches",
+      action: { href: "/products", label: "Clear filters" },
+    });
+    expect(
+      resolveListingEmpty({
+        total: 12,
+        matchCount: 4,
+        query: { sort: "featured" },
+        mode: "catalog",
+        basePath: "/products",
+      }),
+    ).toBeNull();
+    expect(
+      resolveListingEmpty({
+        total: 12,
+        matchCount: 0,
+        query: { sort: "featured" },
+        mode: "search",
+        basePath: "/search",
+      }),
+    ).toMatchObject({ kind: "prompt", title: "Search the catalog" });
   });
 
   it("sorts by price and parses search params", () => {
