@@ -87,11 +87,20 @@ export function Filters({
   );
 }
 
-export function ActiveChips({ basePath, query }: { basePath: string; query: ProductQuery }) {
+export function ActiveChips({
+  basePath,
+  categories,
+  query,
+}: {
+  basePath: string;
+  categories: Category[];
+  query: ProductQuery;
+}) {
   const chips: { label: string; href: string }[] = [];
   if (query.category) {
+    const category = categories.find((item) => item.slug === query.category);
     chips.push({
-      label: query.category,
+      label: category?.name ?? query.category,
       href: `${basePath}${toSearch({ ...query, category: undefined })}`,
     });
   }

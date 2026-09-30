@@ -45,7 +45,7 @@ Demo card that passes format checks and is not charged: `4242 4242 4242 4242`, a
 | `WC_WEBHOOK_SECRET` | Server | HMAC secret for `/api/webhooks/woocommerce`. |
 | `STRIPE_SECRET_KEY` | Server | Creates a PaymentIntent at checkout when present. |
 | `STRIPE_WEBHOOK_SECRET` | Server | Verifies `/api/webhooks/stripe`. |
-| `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` | Public | Enables the express-pay slot. |
+| `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` | Public | Reserved for Stripe wallets. Express Pay stays disabled until those buttons are wired. |
 
 Copy `.env.example` to `.env.local`. Do not prefix the WooCommerce secrets or Stripe secret with `NEXT_PUBLIC_`.
 

@@ -19,11 +19,11 @@ export default async function HomePage() {
           <p className="mt-4 max-w-md text-fg-muted">
             Clothing, home, and studio goods in a short catalog. Guest checkout, flat shipping, thirty-day returns.
           </p>
-          <div className="mt-8 flex flex-wrap gap-3">
+          <div className="mt-8 flex flex-wrap items-center gap-3">
             <Link href="/products" className={buttonClass({ size: "lg" })}>
               Shop the catalog
             </Link>
-            <Link href="/products?sort=newest" className={buttonClass({ size: "lg", variant: "secondary" })}>
+            <Link href="/products?sort=newest" className={buttonClass({ size: "md", variant: "secondary" })}>
               New arrivals
             </Link>
           </div>

@@ -66,7 +66,7 @@ export async function ProductListing({
 
         <div>
           <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <ActiveChips basePath={basePath} query={query} />
+            <ActiveChips basePath={basePath} categories={categories} query={query} />
             <SortSelect value={query.sort ?? "featured"} />
           </div>
           {products.length === 0 ? (

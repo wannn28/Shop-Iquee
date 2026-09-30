@@ -113,7 +113,7 @@ export function AddToCart({ product }: { product: Product }) {
         </p>
       ) : null}
 
-      <div className="fixed inset-x-0 bottom-0 z-30 border-t border-border bg-bg p-4 md:hidden">
+      <div className="fixed inset-x-0 bottom-0 z-30 border-t border-border bg-bg px-4 pt-4 pb-[max(1rem,env(safe-area-inset-bottom))] md:hidden">
         <div className="mx-auto flex max-w-[1280px] items-center gap-3">
           <QtyStepper value={quantity} max={stockQuantity ?? undefined} onChange={setQuantity} />
           <Button size="lg" className="flex-1" onClick={add} disabled={soldOut && !needsOptions}>

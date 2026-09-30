@@ -15,6 +15,9 @@ export function Header() {
         <Link href="/" className="text-lg font-semibold tracking-tight">
           iquee
         </Link>
+        <Link href="/products" className="inline-flex h-11 items-center type-small md:hidden">
+          Shop
+        </Link>
         <nav className="ml-2 hidden items-center gap-5 md:flex" aria-label="Primary">
           <Link href="/products" className="type-small">
             Shop
